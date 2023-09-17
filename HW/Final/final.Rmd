@@ -1,0 +1,312 @@
+---
+title: "Final Project Team 3"
+date: "5/19/2021"
+output: html_document
+---
+### Data Preparation 
+```{r}
+# Load Required Packages
+library(TSA)
+library(fpp)
+library(forecast)
+library(ggplot2)
+```
+
+```{r}
+# Load Power Data
+data <- read.csv('C:/Users/Jackie/Desktop/power_usage_2016_to_2020.csv')
+head(data)
+```
+
+```{r}
+# Extract the daily power usage
+data$StartDate <- substr(data$StartDate, 1,10)
+
+agg <- aggregate(data[, 2], list(data$StartDate), sum)
+head(agg)
+```
+
+```{r}
+# Use data from 2-17 - 2019
+power <- agg[substr(agg$Group.1,1,4) == '2017' | substr(agg$Group.1,1,4) =='2018'|substr(agg$Group.1,1,4) =='2019',]
+
+head(power)
+```
+
+```{r}
+# Convert Power Usage to Time Series - from 2017 to 2020
+
+colnames(power) <- c('Date', 'Usage')
+
+ts_power <- ts(power$Usage, start = c(2017,1), end = c(2019,365),frequency = 365)
+tsdisplay(ts_power)
+
+length(ts_power)
+dim(power)
+```
+###From the ACF Graph, there is clear sign of seasoanlity which the spring season seems to have much less power usage and way higher volumn of traffic in summer During months of Jan, Feb, march, April the AC is not running for most of the time, occationally Heater is on. Hence you see lower power usage during these months
+```{r}
+shapiro.test(as.vector(ts_power))
+```
+###the p-value is less than 0.05, then the null hypothesis that the data are normally distributed is rejected, thereofore it is essentia to apply boxcox, and transform the data using nearly ?? = ???1, which corresponds to the inverse transformation (transformed value = 1 / original value)
+```{r}
+lambda <- BoxCox.lambda(ts_power)
+lambda
+ts_power %>% BoxCox(lambda =-0.9999242) %>% autoplot()
+boxcox_power <- BoxCox(ts_power, lambda = -0.9999242)
+```
+## Exponetial Smoothing Method
+
+###We will decompose the time series for estimates of trend, seasonal, and random components using moving average method.
+
+The multiplicative model is: Y[t]=T[t] x S[t] x e[t]
+```{r}
+decompose_power <- decompose(ts_power,"multiplicative")
+autoplot(decompose_power) + theme_classic()
+```
+###Seaonsal Adjusting for implemenitng Exponetial Smmothing
+```{r}
+adjusted <- ts_power - decompose_power$seasonal
+plot(adjusted)
+```
+###You can see that the seasonal variation has been removed from the seasonally adjusted time series. The seasonally adjusted time series now just contains the trend component and an irregular component. and it is ready to apply Simple Exponential Smoothing/Naive Method/Average Method. 
+```{r}
+fcses <- ses(adjusted)
+autoplot(fcses)
+checkresiduals(fcses)
+```
+###TBATS is an exponential smoothing model with Box-Cox transformation, ARMA errors, trend and seasonal components. It tunes its parameters automatically, The periods paramater was gather from the below section.
+```{r}
+fc.tbats <- forecast(tbats(ts_power, seasonal.periods=c(10.13514, 375)), h=60)
+plot(fc.tbats)
+```
+###The result on the top shows that since the p value is less than 0.05, we can reject the null hypothesis which is that the autocorrelations (for the chosen lags) in the population from which the sample is taken are all zero. The ACF plot also have  lines that are above the blue threshold. This provides evidence that the time series is not white noise
+
+```{r}
+fcholt <- holt(adjusted)
+autoplot(fcholt)
+checkresiduals(fcholt)
+```
+```{r}
+fcholt2 <- holt(adjusted,damped = TRUE)
+autoplot(fcholt2)
+checkresiduals(fcholt2)
+```
+```{r}
+fcets <- ets(adjusted)
+autoplot(fcets)
+checkresiduals(fcets)
+summary(fcets)
+```
+```{r}
+Model_Naive <- naive(adjusted)
+autoplot(forecast(Model_Naive))
+checkresiduals(Model_Naive)
+summary(Model_Naive)
+```
+
+###In these decomposed plots we can again see the trend and seasonality as inferred previously, but we can also observe the estimation of the random component depicted under the remainder
+```{r}
+adf.test(boxcox_power)
+boxcox_power %>% ur.kpss() %>% summary()
+```
+###From acf test, , the test result is evident from the AFFtest statistic -5.7814 and the corresponding p-value less than 0.01,The p-value suggests that the data is very unlikely given the null hypothesis, Assuming significance ??=0.01, we reject the null hypothesis, and classify this as stationary.So we do not need differencing
+###From the kpss test, the The test statistic is much smaller than the 1% critical value. That is the data is stationary, we do not need difference the data.
+```{r}
+fit <- auto.arima(boxcox_power,max.p = 5,max.q = 5,max.P = 5,max.Q = 5,max.d = 3,seasonal = TRUE,ic = 'aicc')
+plot(forecast(fit,h=20))
+str(fit)
+```
+###Let's see how both seasonal/ none seasonal ARIMA works and find the best performing hyperparameter based on aicc value
+```{r}
+summary(fit)
+checkresiduals(fit)
+```
+```{r}
+fit2 <- auto.arima(boxcox_power,max.p = 5,max.q = 5,max.P = 5,max.Q = 5,max.d = 3,seasonal = FALSE,ic = 'aicc')
+plot(forecast(fit2,h=20))
+str(fit2)
+summary(fit2)
+```
+```{r}
+checkresiduals(fit2)
+```
+```{r}
+fit3 <- auto.arima(boxcox_power,max.p = 5,max.q = 5,max.P = 5,max.Q = 5,max.D = 0,seasonal = TRUE,ic = 'aicc')
+plot(forecast(fit3,h=20))
+fit3
+```
+```{r}
+eacf(boxcox_power)
+```
+```{r}
+m1.co2=Arima(boxcox_power,order=c(2,0,1),seasonal=list(order=c(0,0,1),period= 7,365))
+m1.co2
+```
+###ARIMA with Fourier terms
+```{r}
+p <- periodogram(boxcox_power)
+data.table(period=1/p$freq, spec=p$spec)[order(-spec)][1:2]
+```
+###From the table above we can see that the main seasonality detected is 375.00000	 days, the second seasonality is 10.13514	 days. Thus, we will add two matrices with Fourier terms as external regressors
+```{r}
+require(data.table)
+```
+```{r}
+bestfit <- list(aicc=fit2$aicc, i=0, j=0, fit=fit2)
+for(i in 1:3) {
+  for (j in 1:3){
+    z1 <- fourier(ts(boxcox_power, frequency=10.13514	), K=i)
+    z2 <- fourier(ts(boxcox_power, frequency=375.00000), K=j)
+    fit <- auto.arima(boxcox_power, xreg=cbind(z1, z2), seasonal=F)
+    if(fit$aicc < bestfit$aicc) {
+      bestfit <- list(aicc=fit$aicc, i=i, j=j, fit=fit)
+    }
+  }
+}
+```
+```{r}
+bestfit
+```
+###This model gave us the best peroframnce so far which accurately identiy the multi seasonality in dataset, so i beleive it is more suitable to use the regression With ARIMA error
+
+
+```{r}
+# Load weather data
+weather <- read.csv('weather_2016_2020_daily.csv')
+head(weather)
+```
+
+```{r}
+# Extract the weather details
+weather$Date <- substr(weather$Date, 1,10)
+
+agg2 <- aggregate(weather[, c(4,7,10,13,16,18)], list(weather$Date), mean)
+head(agg2)
+```
+
+```{r}
+# Use data from 2017 - 2019
+weather <- agg2[substr(agg2$Group.1,1,4) == '2017' | substr(agg2$Group.1,1,4) =='2018'|substr(agg2$Group.1,1,4) =='2019',]
+
+head(weather)
+```
+
+```{r}
+# Convert Average Temperature to Time Series - from 2017 to 2020
+ts_temp <- ts(weather$Temp_avg, start = c(2017,1), end = c(2019,365),frequency = 365)
+tsdisplay(ts_temp)
+
+length(ts_temp)
+dim(weather)
+```
+
+### Model Building - Time Series Linear Regression
+```{r}
+lm1 <- tslm(log(train)~log(temp_train))
+lm1
+```
+
+```{r}
+# Check model fitting
+plot(x = log(temp_train), y = log(train), col = 1)
+abline(lm1, col = 2)
+legend('topleft', legend = c('actual' , 'Trend'), col = 1:2, lty = 1)
+```
+
+```{r}
+# Evaluate results and residuals
+summary(lm1)
+
+checkresiduals(lm1)
+```
+
+
+### Transformation 
+```{r}
+plot(ts_power)
+plot(ts_temp)
+```
+
+```{r}
+BoxCox.lambda(ts_power)
+BoxCox.lambda(ts_temp)
+```
+
+```{r}
+log_power <- log(ts_power)
+log_temp <- log(ts_temp)
+```
+
+```{r}
+plot(log_power)
+plot(log_temp)
+```
+
+### 2017 data
+```{r}
+power_17 <- window(ts_power, start = c(2017,1), end = c(2017,365))
+temp_17 <- window(ts_temp, start = c(2017,1), end = c(2017,365))
+power_17_log <- log(power_17)
+temp_17_log <- log(temp_17)
+
+tsdisplay(power_17)
+tsdisplay(power_17_log)
+
+tsdisplay(temp_17)
+tsdisplay(temp_17_log)
+```
+
+```{r}
+plot(power_17 ~ temp_17)
+```
+
+### Model Building - Time Series Linear Regression
+```{r}
+lm2 <- tslm(power_17_log ~ temp_17_log)
+summary(lm2)
+```
+
+```{r}
+plot(power_17_log ~ temp_17_log)
+abline(lm2)
+```
+
+### Model Building - Regression with ARMA errors
+```{r}
+# For Regression with ARIMA Errors, all variables in the model must bestationary. 
+# Stationary test
+
+kpss.test(power_17)
+
+power_17_diff <- diff(power_17,1)
+
+kpss.test(power_17_diff) # Level stationary
+```
+```{r}
+kpss.test(temp_17)
+
+temp_17_diff <- diff(temp_17,1)
+
+kpss.test(temp_17_diff) # Level stationary
+```
+
+```{r}
+adf.test(power_17_diff)
+adf.test(temp_17_diff)
+
+# Both p-value < 0.05 --> Stationary
+```
+
+```{r}
+arima_fit <- auto.arima(power_17, xreg = temp_17, lambda = 0, trace = TRUE, d = 1, seasonal = TRUE, approximation = FALSE, stepwise = FALSE)
+summary(arima_fit)
+checkresiduals(arima_fit)
+```
+
+### Model Building - Vector Autoregressions (VAR and VARIMA)
+- Empirically speaking, VARMA models are not suitable here
+- VARMA models are suitable for situations where variables are cross-correlated (i.e., where all variables affect each other)
+- In our research, temperture will certainly affact the power usage. However, power usage is not likely to affect temperture significantly in a one year period.
+- Thus, the two variables have a unidirectional relationship -- the forecast variable (power usage) is influenced by the predictor variable (temperture), but not vice versa.
+
